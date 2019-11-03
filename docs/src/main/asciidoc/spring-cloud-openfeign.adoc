@@ -1,11 +1,5 @@
-:github-tag: master
-:github-repo: spring-cloud/spring-cloud-openfeign
-:github-raw: https://raw.github.com/{github-repo}/{github-tag}
-:github-code: https://github.com/{github-repo}/tree/{github-tag}
-:all: {asterisk}{asterisk}
-:nofooter:
-:branch: master
 = Spring Cloud OpenFeign
+include::_attributes.adoc[]
 
 *{spring-cloud-version}*
 
@@ -118,7 +112,7 @@ Spring Cloud Netflix provides the following beans by default for feign (`BeanTyp
 * `Client` feignClient: if Ribbon is enabled it is a `LoadBalancerFeignClient`, otherwise the default feign client is used.
 
 The OkHttpClient and ApacheHttpClient feign clients can be used by setting `feign.okhttp.enabled` or `feign.httpclient.enabled` to `true`, respectively, and having them on the classpath.
-You can customize the HTTP client used by providing a bean of either `ClosableHttpClient` when using Apache or `OkHttpClient` when using OK HTTP.
+You can customize the HTTP client used by providing a bean of either `org.apache.http.impl.client.CloseableHttpClient` when using Apache or `okhttp3.OkHttpClient` when using OK HTTP.
 
 Spring Cloud Netflix _does not_ provide the following beans by default for feign, but still looks up beans of these types from the application context to create the feign client:
 
@@ -510,3 +504,7 @@ public interface DemoTemplate {
     CollectionModel<Store> getStores();
 }
 ----
+
+== Configuration properties
+
+To see the list of all Sleuth related configuration properties please check link:appendix.html[the Appendix page].
