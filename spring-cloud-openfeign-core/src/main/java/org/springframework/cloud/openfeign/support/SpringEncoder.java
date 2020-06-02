@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2019 the original author or authors.
+ * Copyright 2013-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,10 +35,13 @@ import org.apache.commons.logging.LogFactory;
 
 import org.springframework.beans.factory.ObjectFactory;
 import org.springframework.boot.autoconfigure.http.HttpMessageConverters;
+import org.springframework.cloud.openfeign.encoding.HttpEncoding;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpOutputMessage;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.ByteArrayHttpMessageConverter;
+import org.springframework.http.converter.GenericHttpMessageConverter;
+import org.springframework.http.converter.HttpMessageConversionException;
 import org.springframework.http.converter.HttpMessageConverter;
 import org.springframework.http.converter.protobuf.ProtobufHttpMessageConverter;
 import org.springframework.web.multipart.MultipartFile;
@@ -49,16 +52,26 @@ import static org.springframework.cloud.openfeign.support.FeignUtils.getHttpHead
 /**
  * @author Spencer Gibb
  * @author Scien Jus
+ * @author Ahmad Mozafarnia
+ * @author Aaron Whiteside
+ * @author Darren Foong
  */
 public class SpringEncoder implements Encoder {
 
 	private static final Log log = LogFactory.getLog(SpringEncoder.class);
 
-	private final SpringFormEncoder springFormEncoder = new SpringFormEncoder();
+	private final SpringFormEncoder springFormEncoder;
 
-	private ObjectFactory<HttpMessageConverters> messageConverters;
+	private final ObjectFactory<HttpMessageConverters> messageConverters;
 
 	public SpringEncoder(ObjectFactory<HttpMessageConverters> messageConverters) {
+		this.springFormEncoder = new SpringFormEncoder();
+		this.messageConverters = messageConverters;
+	}
+
+	public SpringEncoder(SpringFormEncoder springFormEncoder,
+			ObjectFactory<HttpMessageConverters> messageConverters) {
+		this.springFormEncoder = springFormEncoder;
 		this.messageConverters = messageConverters;
 	}
 
@@ -67,8 +80,8 @@ public class SpringEncoder implements Encoder {
 			throws EncodeException {
 		// template.body(conversionService.convert(object, String.class));
 		if (requestBody != null) {
-			Class<?> requestType = requestBody.getClass();
-			Collection<String> contentTypes = request.headers().get("Content-Type");
+			Collection<String> contentTypes = request.headers()
+					.get(HttpEncoding.CONTENT_TYPE);
 
 			MediaType requestContentType = null;
 			if (contentTypes != null && !contentTypes.isEmpty()) {
@@ -76,44 +89,36 @@ public class SpringEncoder implements Encoder {
 				requestContentType = MediaType.valueOf(type);
 			}
 
-			if (bodyType != null && bodyType.equals(MultipartFile.class)) {
-				if (Objects.equals(requestContentType, MediaType.MULTIPART_FORM_DATA)) {
-					this.springFormEncoder.encode(requestBody, bodyType, request);
-					return;
-				}
-				else {
-					String message = "Content-Type \"" + MediaType.MULTIPART_FORM_DATA
-							+ "\" not set for request body of type "
-							+ requestBody.getClass().getSimpleName();
-					throw new EncodeException(message);
+			if (Objects.equals(requestContentType, MediaType.MULTIPART_FORM_DATA)) {
+				this.springFormEncoder.encode(requestBody, bodyType, request);
+				return;
+			}
+			else {
+				if (bodyType == MultipartFile.class) {
+					log.warn(
+							"For MultipartFile to be handled correctly, the 'consumes' parameter of @RequestMapping "
+									+ "should be specified as MediaType.MULTIPART_FORM_DATA_VALUE");
 				}
 			}
 
-			for (HttpMessageConverter<?> messageConverter : this.messageConverters
+			for (HttpMessageConverter messageConverter : this.messageConverters
 					.getObject().getConverters()) {
-				if (messageConverter.canWrite(requestType, requestContentType)) {
-					if (log.isDebugEnabled()) {
-						if (requestContentType != null) {
-							log.debug("Writing [" + requestBody + "] as \""
-									+ requestContentType + "\" using [" + messageConverter
-									+ "]");
-						}
-						else {
-							log.debug("Writing [" + requestBody + "] using ["
-									+ messageConverter + "]");
-						}
-
+				FeignOutputMessage outputMessage;
+				try {
+					if (messageConverter instanceof GenericHttpMessageConverter) {
+						outputMessage = checkAndWrite(requestBody, bodyType,
+								requestContentType,
+								(GenericHttpMessageConverter) messageConverter, request);
 					}
-
-					FeignOutputMessage outputMessage = new FeignOutputMessage(request);
-					try {
-						@SuppressWarnings("unchecked")
-						HttpMessageConverter<Object> copy = (HttpMessageConverter<Object>) messageConverter;
-						copy.write(requestBody, requestContentType, outputMessage);
+					else {
+						outputMessage = checkAndWrite(requestBody, requestContentType,
+								messageConverter, request);
 					}
-					catch (IOException ex) {
-						throw new EncodeException("Error converting request body", ex);
-					}
+				}
+				catch (IOException | HttpMessageConversionException ex) {
+					throw new EncodeException("Error converting request body", ex);
+				}
+				if (outputMessage != null) {
 					// clear headers
 					request.headers(null);
 					// converters can modify headers, so update the request
@@ -139,11 +144,54 @@ public class SpringEncoder implements Encoder {
 				}
 			}
 			String message = "Could not write request: no suitable HttpMessageConverter "
-					+ "found for request type [" + requestType.getName() + "]";
+					+ "found for request type [" + requestBody.getClass().getName() + "]";
 			if (requestContentType != null) {
 				message += " and content type [" + requestContentType + "]";
 			}
 			throw new EncodeException(message);
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private FeignOutputMessage checkAndWrite(Object body, MediaType contentType,
+			HttpMessageConverter converter, RequestTemplate request) throws IOException {
+		if (converter.canWrite(body.getClass(), contentType)) {
+			logBeforeWrite(body, contentType, converter);
+			FeignOutputMessage outputMessage = new FeignOutputMessage(request);
+			converter.write(body, contentType, outputMessage);
+			return outputMessage;
+		}
+		else {
+			return null;
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private FeignOutputMessage checkAndWrite(Object body, Type genericType,
+			MediaType contentType, GenericHttpMessageConverter converter,
+			RequestTemplate request) throws IOException {
+		if (converter.canWrite(genericType, body.getClass(), contentType)) {
+			logBeforeWrite(body, contentType, converter);
+			FeignOutputMessage outputMessage = new FeignOutputMessage(request);
+			converter.write(body, genericType, contentType, outputMessage);
+			return outputMessage;
+		}
+		else {
+			return null;
+		}
+	}
+
+	private void logBeforeWrite(Object requestBody, MediaType requestContentType,
+			HttpMessageConverter messageConverter) {
+		if (log.isDebugEnabled()) {
+			if (requestContentType != null) {
+				log.debug("Writing [" + requestBody + "] as \"" + requestContentType
+						+ "\" using [" + messageConverter + "]");
+			}
+			else {
+				log.debug(
+						"Writing [" + requestBody + "] using [" + messageConverter + "]");
+			}
 		}
 	}
 

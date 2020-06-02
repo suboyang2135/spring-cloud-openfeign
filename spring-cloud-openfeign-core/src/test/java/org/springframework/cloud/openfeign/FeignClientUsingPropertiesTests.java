@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2019 the original author or authors.
+ * Copyright 2013-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,13 +16,14 @@
 
 package org.springframework.cloud.openfeign;
 
+import java.io.IOException;
 import java.lang.reflect.Type;
+import java.net.SocketTimeoutException;
 import java.util.Collections;
 import java.util.Map;
 
 import javax.servlet.http.HttpServletRequest;
 
-import feign.Request;
 import feign.RequestInterceptor;
 import feign.RequestTemplate;
 import feign.RetryableException;
@@ -50,7 +51,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
 import static org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT;
@@ -78,6 +78,8 @@ public class FeignClientUsingPropertiesTests {
 
 	private FeignClientFactoryBean barFactoryBean;
 
+	private FeignClientFactoryBean unwrapFactoryBean;
+
 	private FeignClientFactoryBean formFactoryBean;
 
 	public FeignClientUsingPropertiesTests() {
@@ -88,6 +90,10 @@ public class FeignClientUsingPropertiesTests {
 		this.barFactoryBean = new FeignClientFactoryBean();
 		this.barFactoryBean.setContextId("bar");
 		this.barFactoryBean.setType(FeignClientFactoryBean.class);
+
+		this.unwrapFactoryBean = new FeignClientFactoryBean();
+		this.unwrapFactoryBean.setContextId("unwrap");
+		this.unwrapFactoryBean.setType(FeignClientFactoryBean.class);
 
 		this.formFactoryBean = new FeignClientFactoryBean();
 		this.formFactoryBean.setContextId("form");
@@ -106,6 +112,12 @@ public class FeignClientUsingPropertiesTests {
 				"http://localhost:" + this.port);
 	}
 
+	public UnwrapClient unwrapClient() {
+		this.unwrapFactoryBean.setApplicationContext(this.applicationContext);
+		return this.unwrapFactoryBean.feign(this.context).target(UnwrapClient.class,
+				"http://localhost:" + this.port);
+	}
+
 	public FormClient formClient() {
 		this.formFactoryBean.setApplicationContext(this.applicationContext);
 		return this.formFactoryBean.feign(this.context).target(FormClient.class,
@@ -121,6 +133,12 @@ public class FeignClientUsingPropertiesTests {
 	@Test(expected = RetryableException.class)
 	public void testBar() {
 		barClient().bar();
+		fail("it should timeout");
+	}
+
+	@Test(expected = SocketTimeoutException.class)
+	public void testUnwrap() throws Exception {
+		unwrapClient().unwrap();
 		fail("it should timeout");
 	}
 
@@ -145,6 +163,13 @@ public class FeignClientUsingPropertiesTests {
 
 	}
 
+	protected interface UnwrapClient {
+
+		@RequestMapping(method = RequestMethod.GET, value = "/bar") // intentionally /bar
+		String unwrap() throws IOException;
+
+	}
+
 	protected interface FormClient {
 
 		@RequestMapping(value = "/form", method = RequestMethod.POST,
@@ -153,7 +178,7 @@ public class FeignClientUsingPropertiesTests {
 
 	}
 
-	@Configuration
+	@Configuration(proxyBeanMethods = false)
 	@EnableAutoConfiguration
 	@RestController
 	@Import(NoSecurityConfiguration.class)
@@ -233,7 +258,7 @@ public class FeignClientUsingPropertiesTests {
 
 			requestTemplate.header(HttpHeaders.CONTENT_TYPE,
 					MediaType.APPLICATION_FORM_URLENCODED_VALUE);
-			requestTemplate.body(Request.Body.bodyTemplate(builder.toString(), UTF_8));
+			requestTemplate.body(builder.toString());
 		}
 
 	}

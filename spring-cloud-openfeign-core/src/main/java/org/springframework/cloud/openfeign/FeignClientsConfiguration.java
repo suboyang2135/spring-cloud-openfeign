@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2019 the original author or authors.
+ * Copyright 2013-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,27 +20,30 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.fasterxml.jackson.databind.Module;
-import com.netflix.hystrix.HystrixCommand;
 import feign.Contract;
 import feign.Feign;
 import feign.Logger;
 import feign.Retryer;
 import feign.codec.Decoder;
 import feign.codec.Encoder;
-import feign.hystrix.HystrixFeign;
+import feign.form.MultipartFormContentProcessor;
+import feign.form.spring.SpringFormEncoder;
 import feign.optionals.OptionalDecoder;
 
 import org.springframework.beans.factory.ObjectFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.data.web.SpringDataWebProperties;
 import org.springframework.boot.autoconfigure.http.HttpMessageConverters;
+import org.springframework.cloud.openfeign.clientconfig.FeignClientConfigurer;
+import org.springframework.cloud.openfeign.support.AbstractFormWriter;
 import org.springframework.cloud.openfeign.support.PageJacksonModule;
 import org.springframework.cloud.openfeign.support.PageableSpringEncoder;
 import org.springframework.cloud.openfeign.support.ResponseEntityDecoder;
+import org.springframework.cloud.openfeign.support.SortJacksonModule;
 import org.springframework.cloud.openfeign.support.SpringDecoder;
 import org.springframework.cloud.openfeign.support.SpringEncoder;
 import org.springframework.cloud.openfeign.support.SpringMvcContract;
@@ -51,11 +54,14 @@ import org.springframework.core.convert.ConversionService;
 import org.springframework.format.support.DefaultFormattingConversionService;
 import org.springframework.format.support.FormattingConversionService;
 
+import static feign.form.ContentType.MULTIPART;
+
 /**
  * @author Dave Syer
  * @author Venil Noronha
+ * @author Darren Foong
  */
-@Configuration
+@Configuration(proxyBeanMethods = false)
 public class FeignClientsConfiguration {
 
 	@Autowired
@@ -83,16 +89,18 @@ public class FeignClientsConfiguration {
 	@Bean
 	@ConditionalOnMissingBean
 	@ConditionalOnMissingClass("org.springframework.data.domain.Pageable")
-	public Encoder feignEncoder() {
-		return new SpringEncoder(this.messageConverters);
+	public Encoder feignEncoder(ObjectProvider<AbstractFormWriter> formWriterProvider) {
+		return springEncoder(formWriterProvider);
 	}
 
 	@Bean
 	@ConditionalOnClass(name = "org.springframework.data.domain.Pageable")
 	@ConditionalOnMissingBean
-	public Encoder feignEncoderPageable() {
+	public Encoder feignEncoderPageable(
+			ObjectProvider<AbstractFormWriter> formWriterProvider) {
 		PageableSpringEncoder encoder = new PageableSpringEncoder(
-				new SpringEncoder(this.messageConverters));
+				springEncoder(formWriterProvider));
+
 		if (springDataWebProperties != null) {
 			encoder.setPageParameter(
 					springDataWebProperties.getPageable().getPageParameter());
@@ -144,16 +152,39 @@ public class FeignClientsConfiguration {
 		return new PageJacksonModule();
 	}
 
-	@Configuration
-	@ConditionalOnClass({ HystrixCommand.class, HystrixFeign.class })
-	protected static class HystrixFeignConfiguration {
+	@Bean
+	@ConditionalOnClass(name = "org.springframework.data.domain.Page")
+	public Module sortModule() {
+		return new SortJacksonModule();
+	}
 
-		@Bean
-		@Scope("prototype")
-		@ConditionalOnMissingBean
-		@ConditionalOnProperty(name = "feign.hystrix.enabled")
-		public Feign.Builder feignHystrixBuilder() {
-			return HystrixFeign.builder();
+	@Bean
+	@ConditionalOnMissingBean(FeignClientConfigurer.class)
+	public FeignClientConfigurer feignClientConfigurer() {
+		return new FeignClientConfigurer() {
+		};
+	}
+
+	private Encoder springEncoder(ObjectProvider<AbstractFormWriter> formWriterProvider) {
+		AbstractFormWriter formWriter = formWriterProvider.getIfAvailable();
+
+		if (formWriter != null) {
+			return new SpringEncoder(new SpringPojoFormEncoder(formWriter),
+					this.messageConverters);
+		}
+		else {
+			return new SpringEncoder(new SpringFormEncoder(), this.messageConverters);
+		}
+	}
+
+	private class SpringPojoFormEncoder extends SpringFormEncoder {
+
+		SpringPojoFormEncoder(AbstractFormWriter formWriter) {
+			super();
+
+			MultipartFormContentProcessor processor = (MultipartFormContentProcessor) getContentProcessor(
+					MULTIPART);
+			processor.addFirstWriter(formWriter);
 		}
 
 	}

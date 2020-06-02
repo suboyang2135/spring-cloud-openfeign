@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2015 the original author or authors.
+ * Copyright 2013-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,6 @@ import org.junit.runner.RunWith;
 
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
-import org.springframework.cloud.netflix.archaius.ArchaiusAutoConfiguration;
 import org.springframework.cloud.openfeign.support.SpringEncoder;
 import org.springframework.cloud.openfeign.support.SpringMvcContract;
 import org.springframework.cloud.test.ClassPathExclusions;
@@ -87,8 +86,8 @@ public class EnableFeignClientsTests {
 		Feign.Builder.class.cast(this.context.getBeansOfType(Feign.Builder.class).get(0));
 	}
 
-	@Configuration
-	@Import({ ArchaiusAutoConfiguration.class, FeignAutoConfiguration.class })
+	@Configuration(proxyBeanMethods = false)
+	@Import({ FeignAutoConfiguration.class })
 	protected static class PlainConfiguration {
 
 	}
